@@ -3,20 +3,35 @@ package main
 import (
 	"fmt"
 	"log"
+	"math"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/davecgh/go-spew/spew"
 
-	"github.com/AwolDes/goanda"
+	"github.com/byronhallett/goanda"
 	"github.com/joho/godotenv"
 )
 
+// Some constants for OANDA orders
 const (
-	market        string  = "MARKET"
-	fok           string  = "FOK"
-	volumePercent float64 = 100
-	orderFill     string  = "DEFAULT"
+	market               string = "MARKET"
+	fireOrKill           string = "FOK"
+	immediateOrCancelled string = "IOC"
+	defaultFill          string = "DEFAULT"
 )
+
+type botParams struct {
+	candleGranularity string
+	candleCount       string
+	momentumPeriod    int
+	rsiPeriod         int
+	stDevPeriod       int
+	volumeFactor      float64
+	takeProfitFactor  float64
+	stopLossFactor    float64
+}
 
 func startOandaConnection() (*goanda.OandaConnection, string) {
 	// Load the env
@@ -56,24 +71,105 @@ func getInstrumentsWithoutPositions(connection *goanda.OandaConnection, fromInst
 	return &ret
 }
 
-func runBot(connection *goanda.OandaConnection, instruments *goanda.AccountInstruments, momentumPeriod int, rsiPeriod int, takeProfitFactor float64, stopLossFactor float64) {
-	// candleFrequency := "1M" // TODO, parametrise
+func average(candles *[]goanda.Candle) (result float64) {
+	for _, c := range *candles {
+		result += c.Mid.Close
+	}
+	result /= math.Max(float64(len(*candles)), 1)
+	return
+}
+
+func computeMomentum(candles *goanda.BidAskCandles, period int) float64 {
+	endIndex := len(candles.Candles) - 1
+	spew.Dump(period, endIndex)
+	firstHalf := candles.Candles[endIndex-2*period : endIndex-period]
+	lastHalf := candles.Candles[endIndex-period : endIndex]
+	return average(&lastHalf) - average(&firstHalf)
+}
+
+func computeRSI(candles *goanda.BidAskCandles, period int) float64 {
+	return 1
+}
+
+func computeStandardDeviation(candles *goanda.BidAskCandles, period int) float64 {
+	return 2.0
+}
+
+func goLong(connection *goanda.OandaConnection, instrument *goanda.Instrument, lastCandle *goanda.Candle, params *botParams) {
+	tradeVol := int((1 / lastCandle.Bid.Close) * params.volumeFactor)
+	if tradeVol < 0 {
+		return
+	}
+	tp := fmt.Sprintf("%f.6", lastCandle.Ask.Close)
+	sl := fmt.Sprintf("%f.6", lastCandle.Bid.Close)
+	response := connection.CreateOrder(goanda.OrderPayload{Order: goanda.OrderBody{
+		Instrument:       instrument.Name,
+		Type:             market,
+		Units:            tradeVol,
+		TimeInForce:      fireOrKill,
+		PositionFill:     defaultFill,
+		TakeProfitOnFill: &goanda.OnFill{Price: tp},
+		StopLossOnFill:   &goanda.OnFill{Price: sl},
+	}})
+	fmt.Println("Placed long order:")
+	spew.Dump(response.OrderFillTransaction)
+}
+
+func goShort(connection *goanda.OandaConnection, instrument *goanda.Instrument, lastCandle *goanda.Candle, params *botParams) {
+	tradeVol := int((1 / lastCandle.Ask.Close) * params.volumeFactor)
+	if tradeVol < 0 {
+		return
+	}
+	tp := fmt.Sprintf("%f.6", lastCandle.Bid)
+	sl := fmt.Sprintf("%f.6", lastCandle.Ask)
+	response := connection.CreateOrder(goanda.OrderPayload{Order: goanda.OrderBody{
+		Instrument:       instrument.Name,
+		Type:             market,
+		Units:            -tradeVol,
+		TimeInForce:      fireOrKill,
+		PositionFill:     defaultFill,
+		TakeProfitOnFill: &goanda.OnFill{Price: tp},
+		StopLossOnFill:   &goanda.OnFill{Price: sl},
+	}})
+	fmt.Println("Placed short order:")
+	spew.Dump(response.OrderFillTransaction)
+}
+
+func analyseAndTrade(connection *goanda.OandaConnection, instrument *goanda.Instrument, params *botParams, wg *sync.WaitGroup) {
+	defer wg.Done()
+	candles := connection.GetBidAskCandles(instrument.Name, params.candleCount, params.candleGranularity)
+	// Assess the candles for Momentum, RSI, ST.DEV
+	momentum := computeMomentum(&candles, params.momentumPeriod)
+	spew.Dump(momentum)
+	return
+	isLong := momentum > 0
+	rsi := computeRSI(&candles, params.rsiPeriod)
+	stDev := computeStandardDeviation(&candles, params.stDevPeriod)
+	score := momentum * rsi * stDev
+
+	// If score is high, enter following block
+	if score > 1 {
+		lastCandle := candles.Candles[len(candles.Candles)-1]
+		if isLong {
+			goLong(connection, instrument, &lastCandle, params)
+		} else {
+			goShort(connection, instrument, &lastCandle, params)
+		}
+	}
+}
+
+// runBot can be run on its own thread to allow testing bots simultaneously
+func runBot(connection *goanda.OandaConnection, instruments *goanda.AccountInstruments, params *botParams) {
 	noPos := getInstrumentsWithoutPositions(connection, instruments)
+	var wg sync.WaitGroup
+	wg.Add(len(noPos.Instruments))
 	for _, instrument := range noPos.Instruments {
-		// Assess this one
-		prices := connection.GetInstrumentPrice(instrument.Name).Prices
-		lastPrice := prices[len(prices)-1].CloseoutBid
-		// We found a good'n
-		response := connection.CreateOrder(goanda.OrderPayload{Order: goanda.OrderBody{
-			Instrument:   instrument.Name,
-			Units:        int(lastPrice * volumePercent),
-			Type:         market,
-			TimeInForce:  fok,
-			PositionFill: orderFill,
-		}})
-		spew.Dump(response)
+		// Get the candles of interest
+		go analyseAndTrade(connection, &instrument, params, &wg)
 		break
 	}
+	wg.Wait()
+	time.Sleep(time.Second)
 }
 
 func main() {
@@ -81,6 +177,15 @@ func main() {
 	connection, accountID := startOandaConnection()
 	fmt.Println("getting currencies")
 	currencies := getCurrencies(connection, accountID)
-	fmt.Println("Filtering currencies")
-	runBot(connection, currencies, 450, 14, 0.001, 0.001)
+	fmt.Println("Runnning bot")
+	runBot(connection, currencies, &botParams{
+		candleGranularity: "M1",
+		candleCount:       "500",
+		momentumPeriod:    450,
+		rsiPeriod:         14,
+		stDevPeriod:       14,
+		volumeFactor:      100,
+		takeProfitFactor:  0.001,
+		stopLossFactor:    0.001,
+	})
 }
