@@ -134,6 +134,10 @@ func placeOrder(connection *goanda.OandaConnection, instrument *goanda.Instrumen
 		TakeProfitOnFill: &goanda.OnFill{Price: fmt.Sprintf("%f", tp)},
 		StopLossOnFill:   &goanda.OnFill{Price: fmt.Sprintf("%f", sl)},
 	}})
+	fmt.Println("===============================================================")
+	fmt.Println(fmt.Sprintf("inst: %s   Units: %d   price: %s   TP: %f   SL: %f",
+		instrument.Name, units, response.OrderFillTransaction.Price, tp, sl))
+	fmt.Println("===============================================================")
 	return &response
 }
 
