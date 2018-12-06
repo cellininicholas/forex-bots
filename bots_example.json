@@ -1,0 +1,32 @@
+[
+  {
+    "name": "Slow bot",
+    "account": "account_id_1",
+    "params": {
+      "candleGranularity": "M1",
+      "candleCount": "500",
+      "momentumPeriod": 300,
+      "rsiPeriod": 14,
+      "stDevPeriod": 14,
+      "volumeFactor": 100,
+      "SMAPeriod": 200,
+      "takeProfitFactor": 0.00015,
+      "stopLossFactor": 0.00200
+    }
+  },
+  {
+    "name": "Fast bot",
+    "account": "account_id_2",
+    "params": {
+      "candleGranularity": "S5",
+      "candleCount": "500",
+      "momentumPeriod": 450,
+      "rsiPeriod": 14,
+      "stDevPeriod": 14,
+      "volumeFactor": 150,
+      "SMAPeriod": 250,
+      "takeProfitFactor": 0.0001,
+      "stopLossFactor": 0.0020
+    }
+  }
+]
