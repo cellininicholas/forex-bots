@@ -9,7 +9,9 @@
 5. add your API key
 6. `cp bots_example.json bots.json`
 7. design your bots. The account ids are listed on your OANDA account management page
-8. `go run main.go`
+8. `go get github.com/byronhallett/goanda`
+9. `go get github.com/joho/godotenv`
+10. `go run main.go`
 
 ## OANDA short term bot
 
